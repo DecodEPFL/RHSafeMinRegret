@@ -1,9 +1,14 @@
+import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 from tikzplotlib import save as tikz_save
 from scipy.sparse.linalg import eigs
 
-def plot_numpy_dict(data, x_label="x", y_label="y", name="plot"):
+matplotlib.rcParams['lines.markersize'] = 2
+plt.ion()
+
+def plot_numpy_dict(data, x_label="x", y_label="y",
+                    name="plot", save=True, plot="plot"):
     """
     Plots a dictionary of numpy arrays and exports the plot as tikz
     
@@ -11,8 +16,11 @@ def plot_numpy_dict(data, x_label="x", y_label="y", name="plot"):
     :param x_label: Label for x-axis and key for x values
     :param y_label: Label for y-axis
     :param name: Title and filename
+    :param save: save plot as tikz
+    :param plot: plot function member of matplotlib.pyplot.
     :return: None
     """
+    pltf = getattr(plt, plot)
     
     # Generate relative errors
     err, mine = {}, np.inf
@@ -27,9 +35,10 @@ def plot_numpy_dict(data, x_label="x", y_label="y", name="plot"):
     # Plot all elements except x value
     for key, value in data.items():
         if key is not x_label and x_label is not None:
-            plt.plot(data[x_label], value, label=key + err[key])
+            pltf(data[x_label], value, label=key + err[key],
+                 linewidth=1)
         elif x_label is None:
-            plt.plot(value, label=key)
+            pltf(value, label=key, linewidth=1)
     plt.ylabel(y_label)
     
     # Set x axis if given
@@ -42,8 +51,10 @@ def plot_numpy_dict(data, x_label="x", y_label="y", name="plot"):
     plt.legend(loc='best')
     
     # Plot and save
-    tikz_save(name + ".tikz") #, figurewidth='\\figurewidth')
-    plt.show()
+    if save:
+        tikz_save(name + ".tikz") #, figurewidth='\\figurewidth')
+        plt.show()
+        plt.figure()
 
 
 def eval(phi, t, disturbances, n=1, mask=None):
@@ -57,15 +68,17 @@ def eval(phi, t, disturbances, n=1, mask=None):
     :param n: number of realizations to average for random
         disturbance patterns.
     :param mask: set elements to 0 to ignore the corresponding
-        element in the disturbance.
+        element in the disturbance. Pay attention to shape with
+        custom disturbances.
     :return: dict with errors for each disturbance.
     """
 
     if type(disturbances) is str:
         disturbances = [disturbances]
     elif type(disturbances) is np.ndarray:
-        if len(disturbances) == phi.shape[1]:
-            return {"custom" : phi @ disturbances}
+        if disturbances.shape[0] == phi.shape[1]:
+            return {"custom" : phi @
+                    (disturbances * (mask if mask is not None else 1))}
         else:
             raise ValueError("Custom disturbance has a wrong shape.")
     elif type(disturbances) is not list:
@@ -75,7 +88,7 @@ def eval(phi, t, disturbances, n=1, mask=None):
     w = dict()
     
     for d in disturbances:
-        if type(d) is np.ndarray and len(d) == phi.shape[1]:
+        if type(d) is np.ndarray and d.shape[0] == phi.shape[1]:
             w["custom"] = d
         elif "gaussian" in d:  # Gaussian: N(0, 1)
             f = float(d.replace("gaussian", "")) \

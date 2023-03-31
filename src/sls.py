@@ -47,6 +47,13 @@ class sls:
             sls.B[i*sls.n:(i+1)*sls.n, i*sls.m:(i+1)*sls.m], \
             sls.C[i*sls.p:(i+1)*sls.p, i*sls.n:(i+1)*sls.n] = \
                 sys.lin(t[i], z[i, :])
+        sls.A[-sls.n:, -sls.n:] = 0
+        sls.B[-sls.n:, -sls.m:] = 0
+        sls.C[:sls.p, :sls.n] = 0
+
+        # default normal disturbance patterns
+        sls.vs = np.hstack((sls.Ip, 0*sls.C))
+        sls.ws = np.hstack((0*sls.C.T, sls.In))
                             
         # Error cost
         sls.Q = cost.copy()
@@ -56,21 +63,42 @@ class sls:
         sls.Qinv = np.linalg.inv(sls.Qsqrt)
         
         # Weighted least squares solver
-        sls._solver = lambda x : \
+        sls._lstsq = lambda x : \
             np.linalg.lstsq(x[0], x[1], rcond=None)[0]
         
+        # Least Absolute Deviations solver (custom made in conf)
+        sls._lstad = lambda x : \
+            np.linalg.lstad(x[0], x[1], {"maxiter": 5})
+
     @staticmethod
-    def min(objective='causal', _solver=None):
+    def train(v, w, axis=1):
     #############################################################
-    #   Build the error maps minimizing the h2 criterion.
+    #   Sets the empirical distribution of the noise for which
+    #   the observer will be optimal
+    #   Both trajectories must have the same length in time
+    #
+    #   :param v: samples of measurement noise
+    #   :param w: samples of disturbance
+    #   :param axis: index of time axis (default 1)
+    #   :return: distrubance and noise to error sls maps
+    #############################################################
+    
+        sls.ws = w if axis == 1 else w.T
+        sls.vs = v if axis == 1 else v.T
+        
+        
+        
+    @staticmethod
+    def min(t_pred=0, _solver=None):
+    #############################################################
+    #   Build the error maps the optimize the estimation error
+    #   in the current setup.
     #   Use sls.set before to initialize the system!
     #
-    #   :param objective: string parameter:
-    #       - causal for causal h2 observer
-    #       - noncausal for clairvoyant observer
-    #       - regret for minimal regret observer
-    #   :param _solver: (optional) solver function for least
-    #       squares, default is sp.linalg.lstsq
+    #   :param t_pred: number of time steps to predict
+    #       default is 0, used for causality set negative for regret
+    #   :param _solver: (optional) solver function for regression
+    #       default is sp.linalg.lstsq
     #       (with A and b packed in a tuple)
     #   :return: distrubance and noise to error sls maps
     #############################################################
@@ -82,42 +110,38 @@ class sls:
         pb = tqdm if sls.verbose else lambda x: x
 
         # Deal with optional parameter
-        _solver = sls._solver if _solver is None else _solver
+        _solver = sls._lstsq if _solver is None else _solver
     
         # Make transform from Phi_v to Phi_w
         iza = np.linalg.inv(sls.In - sls.Z @ sls.A)
         _v, _w = (0*sls.C.T).copy(), (0*sls.A).copy()
         
         # Build noncausal noise and disturbance to error sls maps
-        if objective == 'noncausal' or objective == 'regret':
+        if t_pred < 0:
             # Solve unconsrained h2 problem (unvectorized)
             _v = sls.Qinv @ _solver(sls._lstsq_mats(iza)).T
             _w = (sls.In - _v @ sls.C @ sls.Z) @ iza
             
-            if objective == 'noncausal':
-                return _w, _v
+            # Correct the predictive horizon length
+            t_pred = -t_pred
         
         # Build causal noise and disturbance to error sls maps
-        if objective == 'causal' or objective == 'regret':
-            # vech(Phi_v) multiplier and bias
-            _a, _b = sls._lstsq_mats(iza, _w, _v)
-            
-            # Solve multiple regression with params set to 0
-            for i in pb(range(sls.T)):
-                # Solve expectation maximization problem
-                sol = _solver((_a[:, :(i+1)*sls.p],
-                               _b[:, i*sls.n:(i+1)*sls.n]))
-                
-                # Save in corresponding columns of _v
-                _v[i*sls.n:(i+1)*sls.n, :(i+1)*sls.p] = sol.T
-                _v[i*sls.n:(i+1)*sls.n, (i+1)*sls.p:] = 0
-            
-            _v = sls.Qinv @ _v
-            return (sls.In - _v @ sls.C @ sls.Z) @ iza, _v
+        # vech(Phi_v) multiplier and bias
+        _a, _b = sls._lstsq_mats(iza, _w, _v)
         
-        # Wrong objective passed
-        raise ValueError("valid objectives are: 'causal'," + \
-            "'noncausal', and 'regret'.")
+        # Solve multiple regression with params set to 0
+        for i in pb(range(sls.n*sls.T)):
+            # Solve expectation maximization problem
+            # Without the sls.p * t_pred last columns of _a
+            sol = _solver((_a[:, :(-(sls.p*t_pred) or None)],
+                           _b[:, i], i)) * (i >= sls.n)
+            
+            # Save in corresponding columns of _v
+            _v[i, :(-(sls.p*t_pred) or None)] = sol.T
+            _v[i, _v.shape[1]-(sls.p*t_pred):] = 0
+        
+        _v = sls.Qinv @ _v
+        return (sls.In - _v @ sls.C @ sls.Z) @ iza, _v
         
     @staticmethod
     def _lstsq_mats(iza, nc_w=None, nc_v=None):
@@ -138,8 +162,9 @@ class sls:
         nc_w = 0*sls.A if nc_w is None else nc_w.T
         
         # Build matrices for lstsq problem maximizing expectation
-        return np.vstack((sls.Ip, iza.T @ sls.Z.T @ sls.C.T)), \
-               np.vstack((0*sls.C + nc_v, iza.T + nc_w)) @ sls.Qsqrt
+        return sls.ws.T @ iza.T @ sls.Z.T @ sls.C.T - sls.vs.T, \
+               sls.vs.T @ nc_v + \
+                   sls.ws.T @ (iza.T + nc_w) @ sls.Qsqrt
         
     
 class dro(sls):
@@ -147,33 +172,36 @@ class dro(sls):
 #   DISTRIBUTIONALLY ROBUST OPTIMIZATION SOLVER
 #############################################################
     # Use the sls attributes plus the wasserstein radius
-    eps = 0
+    eps_w, eps_v = 0, 0
         
     @staticmethod
-    def min(objective='causal'):
+    def min(t_pred=0, _solver=None):
     #############################################################
-    #   Build the error maps minimizing the h2 criterion.
+    #   Build the error maps the optimize the estimation error
+    #   in the current setup.
     #   Based on the parameters contained in the sls class.
     #   Use sls.set before to initialize the system!
     #
-    #   :param objective: string parameter:
-    #       - causal for causal h2 observer
-    #       - noncausal for clairvoyant observer
-    #       - regret for minimal regret observer
+    #   :param t_pred: number of time steps to predict
+    #       default is 0, used for causality set negative for regret
+    #   :param _solver: (optional) solver function for regression
+    #       default is sp.linalg.lstsq
+    #       (with A and b packed in a tuple)
     #   :return: distrubance and noise to error sls maps
     #############################################################
+
+        # Deal with optional parameter
+        _sls_solver = sls._lstsq if _solver is None else _solver
         
-        # Transform eps into regularizer for iza deviations
-        d = np.sqrt(dro.eps)
-        
-        # Quick access to necessary shapes
-        ss = lambda x : (x[0].shape[1],
-                         (x[0].shape[1], x[1].shape[1]))
+        # Added regularization rows to _lstsq_mats
+        iza = np.linalg.inv(sls.In - sls.Z @ sls.A)
+        _a = np.vstack((-dro.eps_v * sls.Ip,
+                        dro.eps_w * iza.T @ sls.Z.T @ sls.C.T))
+        _b = np.vstack((0*sls.C, dro.eps_w * iza.T @ sls.Qsqrt))
         
         # Regularized solver
-        _solver = lambda x : \
-            np.linalg.lstsq(np.vstack((x[0], d*np.eye(ss(x)[0]))),
-                            np.vstack((x[1], np.zeros(ss(x)[1]))),
-                            rcond=None)[0]
+        _solver = lambda x : _sls_solver((
+            np.vstack((x[0], _a[:, :x[0].shape[1]])),
+            np.concatenate((x[1], _b[:, x[2]]))))
             
-        return sls.min(objective, _solver)
+        return sls.min(t_pred, _solver)

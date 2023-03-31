@@ -13,8 +13,8 @@ m = 0
 n = 2
 p = 1
 
-# Damping parameter for the Van der Pol oscillator
-prm = 1
+# Damping and frequency parameter for the Van der Pol oscillator
+prm = 1, 1
 
 
 def dyn(t, z, u=None, q=None):
@@ -25,7 +25,8 @@ def dyn(t, z, u=None, q=None):
 #   :param t: time instant.
 #   :param z: tuple containing position (x) and speed (y).
 #   :param u: system input (empty).
-#   :param q: damping parameter mu, default is vdp.prm.
+#   :param q: tuple containing the damping parameter mu,
+#       and the frequency w. The default is vdp.prm.
 #   :return: list of dx/dt and dy/dt.
 #############################################################
     
@@ -33,10 +34,11 @@ def dyn(t, z, u=None, q=None):
     x, y = z
     
     # Use default parameters if none given
-    q = prm if q is None else q
+    m = prm[0] if q is None else q[0]
+    w = prm[1]**2 if q is None else q[1]**2
     
     # Return results of dynamics equation
-    return np.array([y, q*(1 - x**2)*y - x])
+    return np.array([y, m*(1 - x**2)*y - w*x])
     
     
 def obs(t, z, u=None, q=None):
@@ -47,7 +49,8 @@ def obs(t, z, u=None, q=None):
 #   :param t: time instant.
 #   :param z: tuple containing position (x) and speed (y).
 #   :param u: system input (empty).
-#   :param q: damping parameter mu (not used).
+#   :param q: tuple containing the damping parameter mu,
+#       and the frequency w. (not used)
 #   :return: list of dx/dt and dy/dt.
 #############################################################
             
@@ -62,7 +65,8 @@ def lin(t, z, u=None, q=None):
 #   :param t: time instant.
 #   :param z: tuple containing position (x) and speed (y).
 #   :param u: system input (empty).
-#   :param q: damping parameter mu, default is vdp.prm.
+#   :param q: tuple containing the damping parameter mu,
+#       and the frequency w. The default is vdp.prm.
 #   :return: list of dx/dt and dy/dt.
 #############################################################
     
@@ -70,10 +74,11 @@ def lin(t, z, u=None, q=None):
     x, y = z
     
     # Use default parameters if none given
-    q = prm if q is None else q
+    m = prm[0] if q is None else q[0]
+    w = prm[1]**2 if q is None else q[1]**2
     
     # Discretize
-    sys = c2d((np.array([[0, 1],[-2*q*x*y - 1, q*(1 - x**2)]]),
+    sys = c2d((np.array([[0, 1],[-2*m*x*y - w, m*(1 - x**2)]]),
                np.array([[0], [0]]), np.array([[1, 0]]),
                np.array([[0]])), conf.ts)
         

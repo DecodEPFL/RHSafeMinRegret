@@ -77,7 +77,8 @@ if __name__ == '__main__':
     e_h2 = eval(np.vstack((px2, pu2)), sls.T, patterns, 1000)
     e_hi = eval(np.vstack((pxi, pui)), sls.T, patterns, 1000)
     e_reg = eval(np.vstack((pxr, pur)), sls.T, patterns, 1000)
-    
+                
+    print(" ".ljust(16), "[h2   , hinf   , regret]")
     for p in patterns:
         e_h2[p] = np.linalg.norm(e_h2[p])
         e_hi[p] = np.linalg.norm(e_hi[p])
