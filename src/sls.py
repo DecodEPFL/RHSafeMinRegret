@@ -68,7 +68,7 @@ class sls:
         
         # Least Absolute Deviations solver (custom made in conf)
         sls._lstad = lambda x : \
-            np.linalg.lstad(x[0], x[1], {"maxiter": 5})
+            np.linalg.lstad(x[0], x[1])
 
     @staticmethod
     def train(v, w, axis=1):
