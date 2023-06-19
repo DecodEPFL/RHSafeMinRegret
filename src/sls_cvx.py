@@ -6,7 +6,7 @@ import cvxpy as cp
 
 class sls:
 #############################################################
-#   SYSTEM LEVEL SYNTHESIS OBSERVER DESIGN
+#   SYSTEM LEVEL SYNTHESIS CONTROL DESIGN
 #############################################################
     T, I, Z, A, C, S, Ss2, verbose = [0] + [None] * 7
     m, n, p, Im, In, Ip = [0] * 3 + [None] * 3
@@ -85,9 +85,9 @@ class sls:
     #   Use sls.set before to initialize the system!
     #
     #   :param objective: string parameter:
-    #       - causal for causal h2 observer
-    #       - noncausal for clairvoyant observer
-    #       - regret for minimal regret observer
+    #       - causal for causal h2 cost
+    #       - noncausal for clairvoyant cost
+    #       - regret for minimal regret cost
     #   :param _solver: (optional) solver from cvxpy,
     #       default is cp.Mosek
     #   :param constraints: (optional) additional constraints,
@@ -188,6 +188,36 @@ class sls:
         raise ValueError(str(objective) + " is not a valid " \
                          + "objectve. Valid objectives are: " \
                          + "'causal', 'noncausal', and 'regret'.")
+                         
+                         
+    def mkcons(phi, H, h, Hw, hw):
+    #############################################################
+    #   Builds the constraints H @ [x, u] ≤ h and Hw @ [v, w] ≤ hw
+    #   given phi relating [x, u] and [v, w]
+    #
+    #   The constraints are static (the same at each timestep
+    #   To build dynamic constraints, you can directly copy the
+    #   last two lines of the function
+    #
+    #   :param phi: the optimization variable representing sls maps
+    #   :param H: state/input constraint multiplier matrix
+    #   :param h: state/input constraint comparison vector
+    #   :param Hw: noise constraint multiplier matrix
+    #   :param hw: noise constraint comparison vector
+    #   :return: Optimization variables for cvxpy
+    #############################################################
+        # State and input constraints
+        HT, hT = np.kron(H, sls.I), np.kron(np.diag(sls.I), h)
+
+        # disturbance constraint
+        HwT, hwT = np.kron(Hw, sls.I), np.kron(np.diag(sls.I), hw)
+
+        # Dual variable
+        Z = cp.Variable((HwT.shape[0], HT.shape[0]))
+        
+        # List of additional constraints
+        return [Z.T @ hwT <= hT, HT @ phi == Z.T @ HwT, Z >= 0]
+        
         
     @staticmethod
     def _opt_variables(causal=False):
@@ -233,8 +263,8 @@ class sls:
         elif sls.p == 0:
             _phi = cp.bmat([[cp.bmat(_xw)], [cp.bmat(_uw)]])
         else:
-            _phi = cp.bmat([[cp.bmat(_xw), cp.bmat(_uw)],
-                            [cp.bmat(_xw), cp.bmat(_uw)]])
+            _phi = cp.bmat([[cp.bmat(_xw), cp.bmat(_xv)],
+                            [cp.bmat(_uw), cp.bmat(_uv)]])
 
         return _phi
     
@@ -309,3 +339,173 @@ class sls:
         
         # Return new cost and constraint
         return eig, [P >> 0]
+
+
+class dro(sls):
+#############################################################
+#   SYSTEM LEVEL SYNTHESIS DISTRIBUTIONALLY ROBUST OPTIMIZATION
+#############################################################
+    eps = 0.01
+    profiles = None
+    
+    def train(vw_profile):
+    #   :param profiles: samples of the noise to use as empirical
+    #       distribution
+        dro.profiles = vw_profile
+    
+    @staticmethod
+    def min(objective='causal', _solver=None, constraints=None):
+    #############################################################
+    #   Build the error maps minimizing the given objective.
+    #   Use sls.set before to initialize the system!
+    #
+    #   :param objective: string parameter:
+    #       - causal/noncausal/regret is inherited
+    #       - dro for distributionally robust cost
+    #   :param _solver: (optional) solver from cvxpy,
+    #       default is cp.Mosek
+    #   :param constraints: (optional) additional constraints,
+    #       must be a function taking the closed loop map (phi)
+    #       as input and returning a list of cvxpy constraints
+    #   :return: sls maps of distrubance and noise to
+    #       state and input errors
+    #############################################################
+            
+        # Check training and setting
+        if sls.I is None:
+            raise ValueError("sls object is not set with a system")
+        
+        if dro.profiles is None:
+            raise TypeError("empirical distribution must be trained.")
+                
+        # dimensionality of the constraint
+        N = dro.profiles.shape[1]
+        Iw = np.eye(dro.profiles.shape[0])
+        vw = dro.profiles
+                
+        # Make a progress bar if verbose is on
+        pb = tqdm if sls.verbose else lambda x: x
+
+        # Deal with optional parameters
+        _solver = sls._solver if _solver is None else _solver
+        if constraints is None:
+            constraints = lambda x: []
+                
+        # If causal result is asked, move on to that problem
+                
+        # Lower triangular variables for causal problem
+        _pc = sls._opt_variables(True)
+        
+        # Achievability constraint
+        cons = sls._achievability(_pc) + constraints(_pc)
+        
+        if objective == "dro":
+            # Dual variables
+            lbd, s = cp.Variable(), cp.Variable(N)
+            cons += [lbd >= 0, s >= 0]
+                        
+            # Adding variable for Phi.T Phi to stay convex
+            _pcsq = cp.Variable((_pc.shape[1], _pc.shape[1]))
+            sdpc = [cp.bmat([[_pcsq, _pc.T @ sls.Ss2],
+                             [sls.Ss2 @ _pc, np.eye(_pc.shape[0])]
+                             ]) >> 0]
+
+            # SDP constraint
+            for i in range(N):
+                sdpc += [cp.bmat([[lbd*Iw - _pcsq,
+                                   lbd*vw[:, [i]]],
+                                  [lbd*vw[:, [i]].T,
+                                   s[[[i]]]+lbd*cp.norm(vw[:, [i]])]
+                                   ]) >> 0]
+            
+            # Cost
+            obj = lbd*dro.eps*dro.eps + cp.sum(s)/N
+                                      
+            # Solve the problem.
+            cp.Problem(cp.Minimize(obj), cons
+                       + sdpc).solve(solver=_solver, verbose=True)
+                       
+            # Return values
+            _pc = _pc.value
+            return _pc[sls.ixw], _pc[sls.ixv], \
+                   _pc[sls.iuw], _pc[sls.iuv]
+        
+        return sls.min(objective, _solver, constraints)
+
+
+    @staticmethod
+    def mkcons(phi, H, h, p_fail=0.05):
+    #############################################################
+    #   Builds the DR constraints H @ [x, u] ≤ h with empirical
+    #   distribution ws = [[v1, ..., vN], [w1, ..., wN]] and
+    #   given phi relating [x, u] and ws
+    #
+    #   To set the empitical distribution use dro.train(profile)
+    #
+    #   The constraints are static (the same at each timestep
+    #   To build dynamic constraints, you can directly copy the
+    #   last two lines of the function
+    #
+    #   :param phi: the optimization variable representing sls maps
+    #   :param H: state/input constraint multiplier matrix
+    #   :param h: state/input constraint comparison vector
+    #   :param p_fail: probability level of CVar constraint
+    #   :param p_fail: defines whether this is a state or an
+    #       input constraint. Default is True for state constaint.
+    #   :return: Optimization variables for cvxpy
+    #############################################################
+        # Check training
+        if dro.profiles is None:
+            raise TypeError("empirical distribution must be trained.")
+    
+        # dimensionality of the constraint
+        N = dro.profiles.shape[1]
+        Iw = np.eye(dro.profiles.shape[0])
+        nx = sls.T*sls.n
+        
+        # rename handy variables
+        y = p_fail
+        px, pu = phi[:nx, :], phi[nx:, :]
+        vw = dro.profiles
+    
+        # State and input constraints
+        HT, hT = np.kron(H, sls.I), np.kron(np.diag(sls.I), h)
+
+        # Dual variables
+        lbdx, lbdu = cp.Variable(), cp.Variable()
+        taux, tauu = cp.Variable(), cp.Variable()
+        sx, su = cp.Variable(N), cp.Variable(N)
+                
+        # Need a loop here for now, implementing Proposition 5 in
+        # "Capture, Propagate, and Control Distributional Uncertainty"
+        # from Liviu and Nicolas
+        
+        # Constraints on dual varialbes (included the one embeded in J+1)
+        constraints = [taux <= sx, tauu <= su,
+                       lbdx >= 0, lbdu >= 0]
+        
+        # CVar cost less than 0
+        constraints = [lbdx*dro.eps*N + cp.sum(sx) <= 0,
+                       lbdu*dro.eps*N + cp.sum(su) <= 0]
+        
+        # Then SDP for all i and j
+        for i in range(N):
+            # build j-independent parts
+            lm = cp.bmat([[Iw, vw[:, [i]]], [vw[:, [i]].T,
+                          [[np.dot(vw[:, i], vw[:, i])]]]])
+            sc = np.diag(np.hstack([0*np.diag(Iw), 1]))
+            
+            for j in range(H.shape[0]):
+                ajx, aju = HT[[j], :nx].T/(2*y),  HT[[j], nx:].T/(2*y)
+                bjx = (-hT[j] + y*taux - taux)/y
+                bju = (-hT[j] + y*tauu - tauu)/y
+                
+                constraints += \
+                    [cp.bmat([[0*Iw, px.T @ ajx], [ajx.T @ px, [[0]]]])
+                     + sc * (sx[i] - bjx) + lbdx * lm >> 0,
+                     cp.bmat([[0*Iw, pu.T @ aju], [aju.T @ pu, [[0]]]])
+                     + sc * (su[i] - bju) + lbdu * lm >> 0]
+                    #[bjx + cp.kron(ajx.T, vw[:, [i]].T) @ cp.vec(px.T) <= sx[i],
+                    # cp.SOC(lbd, cp.kron(ajx.T, sls.In) @ cp.vec(px.T)]
+        
+        return constraints

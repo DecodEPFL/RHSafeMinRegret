@@ -13,6 +13,10 @@ m = 0
 n = 4
 p = 2
 
+# polytopic constraints
+H, h = None, None
+Hw, hw = None, None
+
 # Parameters for the inverted pendulum
 # Length of pendulum [m], mass of bob [kg], mass of cart [kg],
 # damping for bob [Ns/rad], damping for cart [Ns/m],

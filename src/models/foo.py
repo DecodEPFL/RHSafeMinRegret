@@ -16,6 +16,13 @@ p = 1
 # Damping parameter for the Van der Pol oscillator
 prm = 0.2
 
+# Polytopic constraints
+xb, ub, wb = 5, 5, 0.2
+H = np.vstack((np.eye(n+m), -np.eye(n+m)))
+h = np.array(([xb]*n + [ub]*m)*2)
+Hw = np.vstack((np.eye(n+p), -np.eye(n+p)))
+hw = np.array([wb]*(n+p)*2)
+
 
 def dyn(t, z, u=None, q=None):
 #############################################################

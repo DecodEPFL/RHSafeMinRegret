@@ -16,6 +16,11 @@ p = 1
 # Damping and frequency parameter for the Van der Pol oscillator
 prm = 1, 1
 
+# polytopic constraints
+H, h = None, None
+Hw, hw = None, None
+
+
 
 def dyn(t, z, u=None, q=None):
 #############################################################

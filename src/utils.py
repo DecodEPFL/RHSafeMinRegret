@@ -57,9 +57,10 @@ def plot_numpy_dict(data, x_label="x", y_label="y",
         plt.figure()
 
 
-def eval(phi, t, disturbances, n=1, mask=None):
+def eval(phi, t, disturbances, n=1, mask=None, average=True):
     """
-    Evaluate the closed loop map phi with a given disturbance.
+    Evaluate the closed loop map phi with a given noise.
+    Give Identity closed loop map to obtains noise patterns.
     
     :param phi: Closed loop map to evaluate.
     :param t: length of the time horizon in phi.
@@ -70,6 +71,8 @@ def eval(phi, t, disturbances, n=1, mask=None):
     :param mask: set elements to 0 to ignore the corresponding
         element in the disturbance. Pay attention to shape with
         custom disturbances.
+    :param average: return the average error or the error at
+        each time step in a matrix.
     :return: dict with errors for each disturbance.
     """
 
@@ -124,7 +127,7 @@ def eval(phi, t, disturbances, n=1, mask=None):
     
     # Evaluate the map with all elements of w
     for d in w.keys():
-        w[d] = np.mean(phi @ (w[d] * (mask if mask is not None
-                                      else 1)), axis=1)
+        w[d] = phi @ (w[d] * (mask if mask is not None else 1))
+        w[d] = np.mean(w[d], axis=1) if average else w[d]
     
     return w

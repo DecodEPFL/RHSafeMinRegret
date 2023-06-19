@@ -7,8 +7,6 @@ from src.utils import plot_numpy_dict, eval
 from src.models import andrea as ada
 #from src.models.sim import simulate_system
 from src.sls_cvx import sls
-#from src.sls import sls as slsreg
-#from src.sls import dro
 
 import seaborn as sns
 import matplotlib.pyplot as plt
@@ -51,23 +49,14 @@ if __name__ == '__main__':
     # We can use zeros for the trajectory because the system is LTI
     sls.set(ada, np.linspace(0, 1, 10), np.zeros((3, 10)),
                cost=(np.eye(30), np.eye(20)), axis=1)
-    
-    def _mkcons(phi):
-        # State and input constraints
-        H = np.kron(np.vstack((np.eye(ada.n+ada.m),
-                               -np.eye(ada.n+ada.m))), sls.I)
-        h = np.array(([3]*ada.n + [2]*ada.m)*2*sls.T)
-                
-        # disturbance constraint
-        Hw = np.kron(np.vstack((np.eye(ada.n),
-                                -np.eye(ada.n))), sls.I)
-        hw = np.array([1]*ada.n*2*sls.T)
 
-        # Dual variable
-        Z = cp.Variable((Hw.shape[0], H.shape[0]))
-        
-        # List of additional constraints
-        return [Z.T @ hw <= h, H @ phi == Z.T @ Hw, Z >= 0]
+
+    _mkcons = lambda phi : sls.mkcons(phi,
+        np.vstack((np.eye(ada.n+ada.m), -np.eye(ada.n+ada.m))),
+        np.array(([3]*ada.n + [2]*ada.m)*2),
+        np.vstack((np.eye(ada.n), -np.eye(ada.n))),
+        np.array([1]*ada.n*2))
+
         
     # Solve the h2, hinf and regret problems
     px2, _, pu2, _ = sls.min('h2', constraints=_mkcons)
