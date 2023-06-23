@@ -10,6 +10,7 @@ class sls:
 #############################################################
     T, I, Z, A, C, S, Ss2, verbose = [0] + [None] * 7
     m, n, p, Im, In, Ip = [0] * 3 + [None] * 3
+    verb = True
     
     _mkvar = lambda x: cp.Variable(x) if x[0] > 0 \
         and x[1] > 0 else np.zeros(x)
@@ -53,13 +54,15 @@ class sls:
                 sys.lin(t[i], z[i, :])
         
         # Index matrices for closed loop maps
-        iw = [True] * (sls.n*sls.T) + [False] * (sls.p*sls.T)
-        ix = [True] * (sls.n*sls.T) + [False] * (sls.m*sls.T)
+        sls.iw = [True] * (sls.n*sls.T) + [False] * (sls.p*sls.T)
+        sls.iv = [False] * (sls.n*sls.T) + [True] * (sls.p*sls.T)
+        sls.ix = [True] * (sls.n*sls.T) + [False] * (sls.m*sls.T)
+        sls.iu = [False] * (sls.n*sls.T) + [True] * (sls.m*sls.T)
         
-        sls.ixw = np.ix_(ix, iw)
-        sls.ixv = np.ix_(ix, ~np.array(iw))
-        sls.iuw = np.ix_(~np.array(ix), iw)
-        sls.iuv = np.ix_(~np.array(ix), ~np.array(iw))
+        sls.ixw = np.ix_(sls.ix, sls.iw)
+        sls.ixv = np.ix_(sls.ix, sls.iv)
+        sls.iuw = np.ix_(sls.iu, sls.iw)
+        sls.iuv = np.ix_(sls.iu, sls.iv)
                             
         # Error cost
         if cost is not None and len(cost) == 2:
@@ -108,8 +111,29 @@ class sls:
         if constraints is None:
             constraints = lambda x: []
         
-        # Build noncausal noise and disturbance to error sls maps
-        if objective != 'h2' and objective != 'hinf':
+        # Build noncausal or infinite horizon
+        # noise and disturbance to error sls maps
+        if objective == 'h2 infty' or objective == 'hinf infty':
+            # Variables with only the last block-row to optimize
+            _phi = sls._opt_variables("infty")
+            
+            # H2 optimizes fro norm and hinf spectral norm
+            obj = cp.norm(sls.Ss2 @ _phi,
+                          2 if objective == "hinf infty" else 'fro')
+            
+            # Achievability constraints
+            cons = sls._achievability_infty(_phi) + constraints(_phi)
+                                      
+            # Solve the problem. Results are directly stored in vars
+            cp.Problem(cp.Minimize(obj),
+                       cons).solve(solver=_solver, verbose=sls.verb)
+                                   
+            # Return values
+            _pc = _phi.value
+            return _pc[:sls.n, sls.iw], _pc[:sls.n, sls.iv], \
+                   _pc[sls.n:, sls.iw], _pc[sls.n:, sls.iv]
+                   
+        elif objective != 'h2' and objective != 'hinf':
             # Full variables for unconstrained noncausal problem
             _phi = sls._opt_variables()
             
@@ -120,7 +144,8 @@ class sls:
             cons = sls._achievability(_phi) + constraints(_phi)
             
             # Solve the problem. Results are directly stored in vars
-            cp.Problem(cp.Minimize(obj), cons).solve(solver=_solver)
+            cp.Problem(cp.Minimize(obj),
+                       cons).solve(solver=_solver, verbose=sls.verb)
             
             # Only keep the values and return if needed
             _phi = _phi.value
@@ -131,7 +156,7 @@ class sls:
         # If causal result is asked, move on to that problem
                 
         # Lower triangular variables for causal problem
-        _pc = sls._opt_variables(True)
+        _pc = sls._opt_variables("causal")
         
         # Achievability constraint
         cons = sls._achievability(_pc) + constraints(_pc)
@@ -143,7 +168,7 @@ class sls:
                                       
             # Solve the problem.
             cp.Problem(cp.Minimize(obj),
-                       cons).solve(solver=_solver)
+                       cons).solve(solver=_solver, verbose=sls.verb)
                                    
             # Return values
             _pc = _pc.value
@@ -160,7 +185,7 @@ class sls:
                                       
             # Solve the problem.
             cp.Problem(cp.Minimize(obj), cons
-                       + sdpc).solve(solver=_solver)
+                       + sdpc).solve(solver=_solver, verbose=sls.verb)
                        
             # Return values
             _pc = _pc.value
@@ -177,7 +202,7 @@ class sls:
                                       
             # Solve the problem.
             cp.Problem(cp.Minimize(obj), cons
-                       + sdpc).solve(solver=_solver)
+                       + sdpc).solve(solver=_solver, verbose=sls.verb)
                        
             # Return values
             _pc = _pc.value
@@ -190,7 +215,7 @@ class sls:
                          + "'causal', 'noncausal', and 'regret'.")
                          
                          
-    def mkcons(phi, H, h, Hw, hw):
+    def mkcons(phi, H, h, Hw, hw, repeat=True):
     #############################################################
     #   Builds the constraints H @ [x, u] ≤ h and Hw @ [v, w] ≤ hw
     #   given phi relating [x, u] and [v, w]
@@ -204,10 +229,15 @@ class sls:
     #   :param h: state/input constraint comparison vector
     #   :param Hw: noise constraint multiplier matrix
     #   :param hw: noise constraint comparison vector
+    #   :param repeat: Determines if the constraints H[x, u] ≤ h
+    #       must be repeated for all time steps (True),
+    #       or if it is a constraint on the trajectory (False).
+    #       For inifite horizon use False.
     #   :return: Optimization variables for cvxpy
     #############################################################
         # State and input constraints
-        HT, hT = np.kron(H, sls.I), np.kron(np.diag(sls.I), h)
+        HT, hT = (np.kron(H, sls.I), np.kron(np.diag(sls.I), h)) \
+            if repeat else (H, h)
 
         # disturbance constraint
         HwT, hwT = np.kron(Hw, sls.I), np.kron(np.diag(sls.I), hw)
@@ -220,17 +250,25 @@ class sls:
         
         
     @staticmethod
-    def _opt_variables(causal=False):
+    def _opt_variables(type="causal"):
     #############################################################
     #   Builds the Phi matrices as optimization variables.
     #
-    #   :param causal: sets the upper block-triangle to zero
+    #   :param type: sets the sparsity pattern. several choice:
+    #       - causal: sets the upper block-triangle to zero
+    #       - infty: sets everything to zero besides the last row
+    #       - default is dense matrix
     #   :return: Optimization variables for cvxpy
     #############################################################
     
         # Make each 4 blocks of the output feedback matrix
         # Some are [] if sls.m or sls.p are zero
-        if causal:
+        if type == "infty":
+            _xv = [ [sls._mkvar((sls.n, sls.p*sls.T))] ]
+            _xw = [ [sls._mkvar((sls.n, sls.n*sls.T))] ]
+            _uv = [ [sls._mkvar((sls.m, sls.p*sls.T))] ]
+            _uw = [ [sls._mkvar((sls.m, sls.n*sls.T))] ]
+        elif type == "causal":
             _xv = [ [sls._mkvar((sls.n, sls.p*i)),
                      np.zeros((sls.n, sls.p*(sls.T - i)))]
                    for i in range(1, sls.T)] + \
@@ -293,6 +331,48 @@ class sls:
         if sls.p > 0:
             cons += [phi @ np.block([[sls.In - sls.Z @ sls.A],
                                      [sls.C @ sls.Z]]) == oI]
+                   
+        return cons
+            
+    def _achievability_infty(phi):
+    #############################################################
+    #   Builds the achievability constraints on the Phi matrices
+    #   in infinite horizon (FIR).
+    #
+    #   :param phi: full closed loop map
+    #   :return: Optimization variables for cvxpy
+    #############################################################
+    
+        # Handy matrices
+        _ab = np.hstack((sls.A[:sls.n, :sls.n],
+                         sls.B[:sls.n, :sls.m]))
+        _ac = np.vstack((sls.A[:sls.n, :sls.n],
+                         sls.C[:sls.p, :sls.n]))
+        
+        # make constraint
+        cons = [phi[:sls.n, sls.n*(sls.T-1):sls.n*sls.T]
+                == np.eye(sls.n)]
+        if sls.m > 0:
+            cons += [phi[sls.n:, sls.n*(sls.T-1):sls.n*sls.T] == 0]
+        if sls.p > 0:
+            cons += [phi[:sls.n, -sls.p:] == 0]
+    
+        for t in range(1, sls.T):
+            # Select phis at t and t-1 /!\ Flipped
+            it = list(range((t-1)*sls.n,t*sls.n)) \
+                + list(range(sls.T*sls.n + (t-1)*sls.p,
+                             sls.T*sls.n + t*sls.p))
+            itp1 = list(range(t*sls.n,(t+1)*sls.n)) \
+                + list(range(sls.T*sls.n + t*sls.p,
+                             sls.T*sls.n + (t+1)*sls.p))
+                
+            # If the system has an input
+            if sls.m > 0:
+                cons += [_ab @ phi[:, itp1] == phi[:, it][:sls.n, :]]
+                                        
+            # If the system has an output
+            if sls.p > 0:
+                cons += [phi[:, itp1] @ _ac == (phi[:, it])[:, :sls.n]]
                    
         return cons
             
@@ -378,11 +458,6 @@ class dro(sls):
         if dro.profiles is None:
             raise TypeError("empirical distribution must be trained.")
                 
-        # dimensionality of the constraint
-        N = dro.profiles.shape[1]
-        Iw = np.eye(dro.profiles.shape[0])
-        vw = dro.profiles
-                
         # Make a progress bar if verbose is on
         pb = tqdm if sls.verbose else lambda x: x
 
@@ -390,51 +465,49 @@ class dro(sls):
         _solver = sls._solver if _solver is None else _solver
         if constraints is None:
             constraints = lambda x: []
-                
-        # If causal result is asked, move on to that problem
-                
+                    
         # Lower triangular variables for causal problem
-        _pc = sls._opt_variables(True)
+        # or block row for infinite horizon
+        _pc = sls._opt_variables("causal" if objective == 'dro'
+                                 else "infty")
         
-        # Achievability constraint
-        cons = sls._achievability(_pc) + constraints(_pc)
-        
-        if objective == "dro":
-            # Dual variables
-            lbd, s = cp.Variable(), cp.Variable(N)
-            cons += [lbd >= 0, s >= 0]
-                        
-            # Adding variable for Phi.T Phi to stay convex
-            _pcsq = cp.Variable((_pc.shape[1], _pc.shape[1]))
-            sdpc = [cp.bmat([[_pcsq, _pc.T @ sls.Ss2],
-                             [sls.Ss2 @ _pc, np.eye(_pc.shape[0])]
-                             ]) >> 0]
-
-            # SDP constraint
-            for i in range(N):
-                sdpc += [cp.bmat([[lbd*Iw - _pcsq,
-                                   lbd*vw[:, [i]]],
-                                  [lbd*vw[:, [i]].T,
-                                   s[[[i]]]+lbd*cp.norm(vw[:, [i]])]
-                                   ]) >> 0]
+        if objective == 'dro':
+            # Achievability constraint
+            cons = sls._achievability(_pc) + constraints(_pc)
             
-            # Cost
-            obj = lbd*dro.eps*dro.eps + cp.sum(s)/N
+            # Make the problem
+            obj, sdpc = dro._opt_prob(_pc)
                                       
             # Solve the problem.
             cp.Problem(cp.Minimize(obj), cons
-                       + sdpc).solve(solver=_solver, verbose=True)
+                       + sdpc).solve(solver=_solver, verbose=sls.verb)
                        
             # Return values
             _pc = _pc.value
             return _pc[sls.ixw], _pc[sls.ixv], \
                    _pc[sls.iuw], _pc[sls.iuv]
         
+        elif objective == 'dro infty':
+            # Achievability constraint
+            cons = sls._achievability_infty(_pc) + constraints(_pc)
+            
+            # Make the problem
+            obj, sdpc = dro._opt_prob(_pc)
+                                      
+            # Solve the problem.
+            cp.Problem(cp.Minimize(obj), cons
+                       + sdpc).solve(solver=_solver, verbose=sls.verb)
+                       
+            # Return values
+            _pc = _pc.value
+            return _pc[:sls.n, sls.iw], _pc[:sls.n, sls.iv], \
+                   _pc[sls.n:, sls.iw], _pc[sls.n:, sls.iv]
+        
         return sls.min(objective, _solver, constraints)
 
 
     @staticmethod
-    def mkcons(phi, H, h, p_fail=0.05):
+    def mkcons(phi, H, h, p_fail=0.05, repeat=True):
     #############################################################
     #   Builds the DR constraints H @ [x, u] ≤ h with empirical
     #   distribution ws = [[v1, ..., vN], [w1, ..., wN]] and
@@ -452,16 +525,21 @@ class dro(sls):
     #   :param p_fail: probability level of CVar constraint
     #   :param p_fail: defines whether this is a state or an
     #       input constraint. Default is True for state constaint.
+    #   :param repeat: Determines if the constraints H[x, u] ≤ h
+    #       must be repeated for all time steps (True),
+    #       or if it is a constraint on the trajectory (False).
+    #       For inifite horizon use False.
     #   :return: Optimization variables for cvxpy
     #############################################################
         # Check training
         if dro.profiles is None:
             raise TypeError("empirical distribution must be trained.")
     
-        # dimensionality of the constraint
+        # Dimensionality of the constraint
         N = dro.profiles.shape[1]
         Iw = np.eye(dro.profiles.shape[0])
-        nx = sls.T*sls.n
+        # Split phix and phiu
+        nx = int(phi.shape[0]/(sls.n+sls.m)*sls.n)
         
         # rename handy variables
         y = p_fail
@@ -469,7 +547,8 @@ class dro(sls):
         vw = dro.profiles
     
         # State and input constraints
-        HT, hT = np.kron(H, sls.I), np.kron(np.diag(sls.I), h)
+        HT, hT = n(p.kron(H, sls.I), np.kron(np.diag(sls.I), h)) \
+            if repeat else (H, h)
 
         # Dual variables
         lbdx, lbdu = cp.Variable(), cp.Variable()
@@ -509,3 +588,40 @@ class dro(sls):
                     # cp.SOC(lbd, cp.kron(ajx.T, sls.In) @ cp.vec(px.T)]
         
         return constraints
+            
+    @staticmethod
+    def _opt_prob(phi):
+    #############################################################
+    #   Builds the semi-definite programming problem for DRO
+    #
+    #   :param phi: full closed loop map (optimization variable)
+    #   :return: objective and constraint for optimization
+    #############################################################
+        # dimensionality of the constraint
+        N = dro.profiles.shape[1]
+        Iw = np.eye(dro.profiles.shape[0])
+        vw = dro.profiles
+        
+        # Dual variables
+        lbd, s = cp.Variable(), cp.Variable(N)
+        cons = [lbd >= 0, s >= 0]
+                    
+        # Adding variable for Phi.T Phi to stay convex
+        _pcsq = cp.Variable((phi.shape[1], phi.shape[1]))
+        sdpc = [cp.bmat([[_pcsq, phi.T @ sls.Ss2],
+                         [sls.Ss2 @ phi, np.eye(phi.shape[0])]
+                         ]) >> 0]
+
+        # SDP constraint
+        for i in range(N):
+            sdpc += [cp.bmat([[lbd*Iw - _pcsq,
+                               lbd*vw[:, [i]]],
+                              [lbd*vw[:, [i]].T,
+                               s[[[i]]]+lbd*cp.norm(vw[:, [i]])]
+                               ]) >> 0]
+        
+        # Cost
+        obj = lbd*dro.eps*dro.eps + cp.sum(s)/N
+        
+        # Return new cost and constraint
+        return obj, cons + sdpc
