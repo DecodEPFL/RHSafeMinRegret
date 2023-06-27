@@ -231,8 +231,6 @@ def eval_infty(phi, sys, t, disturbances, n=1,
     if just_profile:
         return w
         
-        
-    print(phi)
     # Handy functions
     _push_time = lambda x, s: np.pad(x, ((0, s),(0, 0)),
                                      mode='constant')[s:, :]
@@ -261,25 +259,18 @@ def eval_infty(phi, sys, t, disturbances, n=1,
             if sys.p > 0:
                 # Get output at k
                 y[-sys.p:, :] = _c @ x + vk
-                # Compute control input at k
-                                        
-            ey = np.vstack([e, y])  if sys.p > 0 else e
-        
-            bu = (_b @ (phi[sys.n:, :] @ ey)) if sys.m > 0 else 0
-                       
-            e = _push_time(e, sys.n)
-            # Update internal state at k+1
-            y = _push_time(y, sys.p)
+            
+            # Compute control input
+            bu = (_b @ (phi[sys.n:, :] @ (np.vstack([e, y])
+                  if sys.p > 0 else e))) if sys.m > 0 else 0
+                                   
+            # Update to k+1
+            e, y = _push_time(e, sys.n), _push_time(y, sys.p)
+            
+            # Compute new internal state
             e[-2*sys.n:-sys.n, :] = (-phi[:sys.n, :] @
                                      np.vstack([e, y])) \
                 if sys.p > 0 else (-phi[:sys.n, :] @ e + x)
-                
-#            print("corresponding e: ")
-#            print(e[-sys.n:, :])
-#            print("state: ")
-#            print(x)
-#            print("distrubance: ")
-#            print(wk)
             
             # Get state at k+1
             x = _a @ x + wk + bu
@@ -287,10 +278,9 @@ def eval_infty(phi, sys, t, disturbances, n=1,
             # append result
             xs = np.vstack([xs, x])
             ys = np.vstack([ys, (_c @ x) if sys.p > 0 else x])
-            us = np.vstack([us, (phi[sys.n:, :] @ ey)
-                            if sys.m > 0 else 0])
-            xu = np.vstack([x, phi[sys.n:, :] @ ey]) \
-                            if sys.m > 0 else x
+            u = np.linalg.pinv(_b) @ bu if sys.m > 0 else 0
+            us = np.vstack([us, u])
+            xu = np.vstack([x, u]) if sys.m > 0 else x
             if cost is not None:
                 cs = np.vstack([cs, np.linalg.norm(cost @ xu,
                                                    axis=0)**2])

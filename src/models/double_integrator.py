@@ -17,7 +17,7 @@ p = 1
 prm = 0.0
 
 # Polytopic constraints
-xb, ub, wb = 5, 5, 0.0001
+xb, ub, wb = 5, 5, 0.2
 H = np.vstack((np.eye(n+m), -np.eye(n+m)))
 h = np.array(([xb]*n + [ub]*m)*2)
 Hw = np.vstack((np.eye(n+p), -np.eye(n+p)))
@@ -48,8 +48,8 @@ def dyn(t, z, u=None, q=None):
     
     # Continuous dynamics. Slow but needed for compatibility
     M = np.block([[np.array([[1 - q, 1], [0, 1 - q]]),
-                   np.array([[1], [0]])],
-                  [np.array([[0, 1]]), np.eye(m)]])
+                   np.array([[0], [1]])],
+                  [np.array([[1, 0]]), np.eye(m)]])
     Ms, (sca, _) = matrix_balance(M, permute=0, separate=1)
     eM = logm(M)*(sca[:, None]*np.reciprocal(sca))*(1/conf.ts)
     
@@ -89,4 +89,4 @@ def lin(t, z, u=None, q=None):
     
     # Return linearization matrix of dynamics and output at z
     return np.array([[1 - q, 1], [0, 1 - q]]), \
-        np.array([[1], [0]]), np.array([[0, 1]])
+        np.array([[0], [1]]), np.array([[1, 0]])

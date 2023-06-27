@@ -8,9 +8,8 @@ class sls:
 #############################################################
 #   SYSTEM LEVEL SYNTHESIS CONTROL DESIGN
 #############################################################
-    T, I, Z, A, C, S, Ss2, verbose = [0] + [None] * 7
+    T, I, Z, A, C, S, Ss2, verb = [0] + [None] * 6 + [False]
     m, n, p, Im, In, Ip = [0] * 3 + [None] * 3
-    verb = True
     
     _mkvar = lambda x: cp.Variable(x) if x[0] > 0 \
         and x[1] > 0 else np.zeros(x)
@@ -104,7 +103,7 @@ class sls:
             raise ValueError("sls object is not set with a system")
                 
         # Make a progress bar if verbose is on
-        pb = tqdm if sls.verbose else lambda x: x
+        pb = tqdm if sls.verb else lambda x: x
 
         # Deal with optional parameters
         _solver = sls._solver if _solver is None else _solver
@@ -343,161 +342,50 @@ class sls:
     #   :return: Optimization variables for cvxpy
     #############################################################
     
-#        # Handy matrices
-#        _ab = np.hstack((sls.A[:sls.n, :sls.n],
-#                         sls.B[:sls.n, :sls.m]))
-#        _ac = np.vstack((sls.A[:sls.n, :sls.n],
-#                         sls.C[:sls.p, :sls.n]))
-#
-#
-#        # make constraints
-#        cons = [phi[:sls.n, sls.n*(sls.T-1):sls.n*sls.T]
-#                == 0]
-#        cons += [phi[:sls.n, sls.n*(sls.T-2):sls.n*(sls.T-1)]
-#                 == np.eye(sls.n)]
-#
-#        if sls.m > 0:
-#            cons += [phi[sls.n:, sls.n*(sls.T-1):sls.n*sls.T] == 0]
-##        elif sls.p > 0:
-##            cons += [phi[:sls.n, -2*sls.p:-sls.p] == 0]
-#
-#        if sls.p > 0:
-#            cons += [phi[:sls.n, -sls.p:] == 0,
-#                     phi[:sls.n, -2*sls.p:-sls.p]
-#                     == sls.B[:sls.n, :sls.m] @ phi[sls.n:, -sls.p:],
-#                     phi[sls.n:, sls.n*(sls.T-2):sls.n*(sls.T-1)]
-#                     == phi[sls.n:, -sls.p:] @ sls.C[:sls.p, :sls.n]]
-##        elif sls.m > 0:
-##            cons += [phi[sls.n:, sls.n*(sls.T-2)
-##                         :sls.n*(sls.T-1)] == 0]
-#
-#        for t in range(sls.T-1):
-#            # Select phis at t and t-1 /!\ Flipped
-#            it = list(range((t-1)*sls.n,t*sls.n)) \
-#                + list(range(sls.T*sls.n + (t-1)*sls.p,
-#                             sls.T*sls.n + t*sls.p))
-#            itp1 = list(range(t*sls.n,(t+1)*sls.n)) \
-#                + list(range(sls.T*sls.n + t*sls.p,
-#                             sls.T*sls.n + (t+1)*sls.p))
-#
-#            print(it, itp1)
-#            # If the system has an input
-#            if sls.m > 0 and t > 0:
-#                cons += [_ab @ phi[:, itp1] ==
-#                         phi[:, it][:sls.n, :] * (t > 0)]
-#
-#            # If the system has an output
-#            if sls.p > 0 and t > 0:
-#                cons += [phi[:, itp1] @ _ac ==
-#                         phi[:, it][:, :sls.n] * (t > 0)]
-#            if t == 0:
-#                cons += [phi[:, itp1] @ _ac == 0,
-#                         _ab @ phi[:, itp1] == 0]
-#        return cons
-            
-        _Phi_xx = []
-        _Phi_ux = []
-        _Phi_xy = []
-        _Phi_uy = []
-        
-        for i in range(sls.T):
-            _Phi_xx.append(phi[:sls.n, sls.n*(sls.T-i-1):sls.n*(sls.T-i)])
-            _Phi_ux.append(phi[sls.n:, sls.n*(sls.T-i-1):sls.n*(sls.T-i)])
-            _Phi_xy.append(phi[:sls.n, (sls.n*sls.T + sls.p*(sls.T-i-1))
-                               :(sls.n*sls.T + sls.p*(sls.T-i))])
-            _Phi_uy.append(phi[sls.n:, (sls.n*sls.T + sls.p*(sls.T-i-1))
-                               :(sls.n*sls.T + sls.p*(sls.T-i))])
-            print(_Phi_xx[i].shape)
-                            
-        _a = sls.A[:sls.n, :sls.n]
-        _b = sls.B[:sls.n, :sls.m]
-        _c = sls.C[:sls.p, :sls.n]
-        
-            
-        '''
-        state-feedback constraints:
-        [ zI-A, -B2 ][ Phi_x ] = I
-                     [ Phi_u ]
+        # Handy matrices
+        _ab = np.hstack((sls.A[:sls.n, :sls.n],
+                         sls.B[:sls.n, :sls.m]))
+        _ac = np.vstack((sls.A[:sls.n, :sls.n],
+                         sls.C[:sls.p, :sls.n]))
 
-        output-feedback constriants:
-        [ zI-A, -B2 ][ Phi_xx Phi_xy ] = [ I 0 ]
-                     [ Phi_ux Phi_uy ]
-        [ Phi_xx Phi_xy ][ zI-A ] = [ I ]
-        [ Phi_ux Phi_uy ][ -C2  ]   [ 0 ]
-        '''
-        
-        constraints = []
+        # make constraints
+        cons = [phi[:sls.n, sls.n*(sls.T-1):sls.n*sls.T]
+                == 0]
+        cons += [phi[:sls.n, sls.n*(sls.T-2):sls.n*(sls.T-1)]
+                 == np.eye(sls.n)]
 
-        Nx = sls.n
-        Nu = sls.m
+        if sls.m > 0:
+            cons += [phi[sls.n:, sls.n*(sls.T-1):sls.n*sls.T] == 0]
 
-        # sls constraints
-        # the below constraints work for output-feedback case as well because
-        _Phi_x = _Phi_xx
-        _Phi_u = _Phi_ux
-        # Phi_x, Phi_u are in z^{-1} RH_{\inf}. Therefore, Phi_x[0] = 0, Phi_u = 0
-        constraints += [ _Phi_x[0] == np.zeros([Nx,Nx]) ]
-        constraints += [ _Phi_u[0] == np.zeros([Nu,Nx]) ]
-        constraints += [ _Phi_x[1] == np.eye(Nx) ]
-        constraints += [
-            (_a  @ _Phi_x[sls.T-1] +
-             _b @ _Phi_u[sls.T-1] ) == np.zeros([Nx, Nx])
-        ]
-        for tau in range(1,sls.T-1):
-            constraints += [
-                _Phi_x[tau+1] == (
-                    _a @ _Phi_x[tau] +
-                    _b @ _Phi_u[tau]
-                )
-            ]
+        if sls.p > 0:
+            cons += [phi[:sls.n, -sls.p:] == 0,
+                     phi[:sls.n, -2*sls.p:-sls.p]
+                     == sls.B[:sls.n, :sls.m] @ phi[sls.n:, -sls.p:],
+                     phi[sls.n:, sls.n*(sls.T-2):sls.n*(sls.T-1)]
+                     == phi[sls.n:, -sls.p:] @ sls.C[:sls.p, :sls.n]]
 
-        Ny = sls.p
+        for t in range(sls.T-1):
+            # Select phis at t and t-1 /!\ Flipped
+            it = list(range((t-1)*sls.n,t*sls.n)) \
+                + list(range(sls.T*sls.n + (t-1)*sls.p,
+                             sls.T*sls.n + t*sls.p))
+            itp1 = list(range(t*sls.n,(t+1)*sls.n)) \
+                + list(range(sls.T*sls.n + t*sls.p,
+                             sls.T*sls.n + (t+1)*sls.p))
+                             
+            # If the system has an input
+            if sls.m > 0 and t > 0:
+                cons += [_ab @ phi[:, itp1] ==
+                         phi[:, it][:sls.n, :] * (t > 0)]
 
-        # Phi_xx, Phi_ux, and Phi_xy are in z^{-1} RH_{\inf}.
-        # Phi_uy is in RH_{\inf} instead of z^{-1} RH_{\inf}.
-        constraints += [ _Phi_xy[0] == np.zeros([Nx,Ny]) ]
-
-        # output-feedback constraints
-        constraints += [
-            _Phi_xy[1] == _b @ _Phi_uy[0]
-        ]
-        constraints += [
-            (_a  @ _Phi_xy[sls.T-1] +
-             _b @ _Phi_uy[sls.T-1]) == np.zeros([Nx, Ny])
-        ]
-        constraints += [
-            (_Phi_xx[sls.T-1] @ _a  +
-             _Phi_xy[sls.T-1] @ _c ) == np.zeros([Nx, Nx])
-        ]
-        constraints += [
-            _Phi_ux[1] == _Phi_uy[0] @ _c
-        ]
-        constraints += [
-            (_Phi_ux[sls.T-1] @ _a  +
-             _Phi_uy[sls.T-1] @ _c ) == np.zeros([Nu, Nx])
-        ]
-        for tau in range(1,sls.T-1):
-            constraints += [
-                _Phi_xy[tau+1] == (
-                    _a  @ _Phi_xy[tau] +
-                    _b @ _Phi_uy[tau]
-                )
-            ]
-
-            constraints += [
-                _Phi_xx[tau+1] == (
-                    _Phi_xx[tau] @ _a  +
-                    _Phi_xy[tau] @ _c
-                )
-            ]
-
-            constraints += [
-                _Phi_ux[tau+1] == (
-                    _Phi_ux[tau] @ _a  +
-                    _Phi_uy[tau] @ _c
-                )
-            ]
-        return constraints
+            # If the system has an output
+            if sls.p > 0 and t > 0:
+                cons += [phi[:, itp1] @ _ac ==
+                         phi[:, it][:, :sls.n] * (t > 0)]
+            if t == 0:
+                cons += [phi[:, itp1] @ _ac == 0,
+                         _ab @ phi[:, itp1] == 0]
+        return cons
             
     @staticmethod
     def _opt_regret(phi, phi_c):
@@ -582,7 +470,7 @@ class dro(sls):
             raise TypeError("empirical distribution must be trained.")
                 
         # Make a progress bar if verbose is on
-        pb = tqdm if sls.verbose else lambda x: x
+        pb = tqdm if sls.verb else lambda x: x
 
         # Deal with optional parameters
         _solver = sls._solver if _solver is None else _solver
