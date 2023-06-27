@@ -69,12 +69,15 @@ if __name__ == '__main__':
                 
     print(" ".ljust(16), "[h2   , hinf   , regret]")
     for p in patterns:
-        e_h2[p] = np.linalg.norm(e_h2[p])
-        e_hi[p] = np.linalg.norm(e_hi[p])
-        e_reg[p] = np.linalg.norm(e_reg[p])
+        e_h2[p] = np.linalg.norm(np.mean(np.abs(e_h2[p]),
+                                         axis=1))
+        e_hi[p] = np.linalg.norm(np.mean(np.abs(e_hi[p]),
+                                         axis=1))
+        e_reg[p] = np.linalg.norm(np.mean(np.abs(e_reg[p]),
+                                          axis=1))
         e = np.array([e_h2[p], e_hi[p], e_reg[p]])
-        best = np.min(e)
-        print(p.ljust(16), np.round((e/best - 1)*10000)/100)
+        e = np.round((e/np.min(e) - 1)*10000)/100
+        print(p.ljust(16), np.where(e == 0, 1, e))
     
     """
     plot_numpy_dict(

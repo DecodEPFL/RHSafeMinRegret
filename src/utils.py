@@ -11,7 +11,8 @@ plt.ion()
 def plot_numpy_dict(data, x_label="x", y_label="y",
                     name="plot", save=True, plot="plot"):
     """
-    Plots a dictionary of numpy arrays and exports the plot as tikz
+    Plots a dictionary of numpy arrays
+    and exports the plot as tikz
     
     :param data: Dictionary of numpy arrays
     :param x_label: Label for x-axis and key for x values
@@ -50,6 +51,7 @@ def plot_numpy_dict(data, x_label="x", y_label="y",
     # Add description
     plt.title(name)
     plt.legend(loc='best')
+    plt.show(block=True)
     
     # Plot and save
     if save:
@@ -58,7 +60,7 @@ def plot_numpy_dict(data, x_label="x", y_label="y",
         plt.figure()
 
 
-def eval(phi, t, disturbances, n=1, mask=None, average=True):
+def eval(phi, t, disturbances, n=1, mask=None):
     """
     Evaluate the closed loop map phi with a given noise.
     Give Identity closed loop map to obtains noise patterns.
@@ -67,13 +69,10 @@ def eval(phi, t, disturbances, n=1, mask=None, average=True):
     :param t: length of the time horizon in phi.
     :param disturbances: list or single disturbance pattern
         This can be names or directly the value for custom ones.
-    :param n: number of realizations to average for random
-        disturbance patterns.
+    :param n: number of realizations for random noise patterns.
     :param mask: set elements to 0 to ignore the corresponding
         element in the disturbance. Pay attention to shape with
         custom disturbances.
-    :param average: return the average error or the error at
-        each time step in a matrix.
     :return: dict with errors for each disturbance.
     """
 
@@ -131,13 +130,12 @@ def eval(phi, t, disturbances, n=1, mask=None, average=True):
     # Evaluate the map with all elements of w
     for d in w.keys():
         w[d] = phi @ (w[d] * (mask if mask is not None else 1))
-        w[d] = np.mean(w[d], axis=1) if average else w[d]
     
     return w
     
     
 def eval_infty(phi, sys, t, disturbances, n=1,
-               mask=None, average=True, verbose=True):
+               mask=None, verbose=False, cost=None):
     """
     Evaluate the closed loop map phi with a given noise.
     Give Identity closed loop map to obtains noise patterns.
@@ -150,12 +148,9 @@ def eval_infty(phi, sys, t, disturbances, n=1,
     :param disturbances: list or single disturbance pattern
         This must be an str or list of str containing the
         name of the distribution generating the noise.
-    :param n: number of realizations to average for random
-        disturbance patterns.
+    :param n: number of realizations for random noise patterns.
     :param mask: set elements to 0 to ignore the corresponding
         element in the disturbance. Size should be sys.n+sys.p.
-    :param average: return the average error or the error at
-        each time step in a matrix.
     :param verbose: display messages and progress bar.
     :return: dict with errors for each disturbance.
     """
@@ -171,7 +166,7 @@ def eval_infty(phi, sys, t, disturbances, n=1,
     elif type(disturbances) is not list:
         raise TypeError("please specify disturbances as str or "
                         + "list of strs.")
-    if phi == np.eye(sys.n+sys.p):
+    if np.all(phi == np.eye(sys.n+sys.p)):
         just_profile = True
     elif phi.shape[0] != sys.n+sys.m:
         raise ValueError("Closed loop map dimension 0 does not \
@@ -193,32 +188,40 @@ def eval_infty(phi, sys, t, disturbances, n=1,
         if "gaussian" in d:  # Gaussian: N(0, 1)
             f = float(d.replace("gaussian", "")) \
                 if d != "gaussian" else 1
-            w[d] = np.random.normal(0, f, (npp*t, n))
+            w[d] = sys.wb * np.random.normal(0, f, (npp*t, n))
         elif "uniform" in d:  # Uniform: U(f, 1)
             f = float(d.replace("uniform", "")) \
                 if d != "uniform" else 1
-            w[d] = (np.random.rand(npp*t, n)*f + 1.0 - f)
+            w[d] = sys.wb * (np.random.rand(npp*t, n)*f + 1.0 - f)
         elif "constant" in d:  # Constant at 1
             f = float(d.replace("constant", "")) \
                 if d != "constant" else 1
-            w[d] = f*np.ones((npp*t, 1))
-        elif "sine" in d:  # Sinusoid
-            f = int(d.replace("sine", "")) if d != "sine" else 1
-            w[d] = np.repeat(np.sin(np.linspace(0, 2*f*np.pi, t)),
-                             npp)[:, None]
-        elif "sawtooth" in d:  # Sawtooth
+            w[d] = sys.wb * f*np.ones((npp*t, n))
+        elif "sine" in d:  # Sinusoid of frequency f
+            f = int(d.replace("sine", "")) if d != "sine" else 1.0/3
+            _s = np.sin(np.linspace(0, 2*f*np.pi*(t-1), t))
+            _s = np.array([np.roll(_s, np.random.randint(len(_s)))
+                           for i in range(n)]).T
+            w[d] = sys.wb * np.repeat(_s, npp, axis=0)
+        elif "sawtooth" in d:  # Sawtooth of frequency f
             f = int(d.replace("sawtooth", "")) \
-                if d != "sawtooth" else 1
-            w[d] = np.repeat(np.linspace(0, f - 1e-10, t) % 1,
-                             npp)[:, None]
+                if d != "sawtooth" else 1.0/3
+            _s = np.linspace(0, (t-1) * f, t) % 1
+            _s = np.array([np.roll(_s, np.random.randint(len(_s)))
+                           for i in range(n)]).T
+            w[d] = sys.wb * np.repeat(_s, npp, axis=0)
         elif "step" in d:  # Step function
-            w[d] = np.repeat(np.hstack((np.zeros(int(np.floor(t/2))),
-                                        np.ones(int(np.ceil(t/2))))),
-                             npp)[:, None]
-        elif "stairs" in d:  # Sawtooth
-            f = int(d.replace("stairs", "")) if d != "stairs" else 1
-            w[d] = np.repeat(np.floor(np.linspace(0, 3*f - 3/t, t)%3)
-                             - 1, npp)[:, None]
+            _s = np.hstack((np.zeros(int(np.floor(t/2))),
+                            np.ones(int(np.ceil(t/2)))))
+            _s = np.array([np.roll(_s, np.random.randint(len(_s)))
+                           for i in range(n)]).T
+            w[d] = sys.wb * np.repeat(_s, npp, axis=0)
+        elif "stairs" in d:  # sawtooth with 3 discrete levels
+            f = int(d.replace("stairs", "")) if d != "stairs" else 1.0/3
+            _s = np.floor(np.linspace(0, 3*(t-1)*f, t)%3)/3
+            _s = np.array([np.roll(_s, np.random.randint(len(_s)))
+                           for i in range(n)]).T
+            w[d] = sys.wb * np.repeat(_s, npp, axis=0)
         #elif d == "worst":  # Worse case
         #    _, w[d] = eigs(phi.T @ phi, 1)
         else:  # Error
@@ -227,7 +230,12 @@ def eval_infty(phi, sys, t, disturbances, n=1,
     
     if just_profile:
         return w
-    
+        
+        
+    print(phi)
+    # Handy functions
+    _push_time = lambda x, s: np.pad(x, ((0, s),(0, 0)),
+                                     mode='constant')[s:, :]
     # Evaluate the map with all elements of w
     pprint("Computing the state and output trajectories...")
     for d in w.keys():
@@ -242,6 +250,8 @@ def eval_infty(phi, sys, t, disturbances, n=1,
         y = np.zeros((sys.p*T, nd)) if sys.p > 0 else e
             
         xs, ys = x, y[-sys.p:, :] if sys.p > 0 else x
+        us = np.zeros((sys.m, nd))
+        cs = np.zeros((sys.n+sys.m if cost is None else 1, nd))
         for k in pbar(range(t)):
             # Extract noise from traj
             ek = w[d][npp*k:npp*(k+1), :] * \
@@ -250,30 +260,42 @@ def eval_infty(phi, sys, t, disturbances, n=1,
             
             if sys.p > 0:
                 # Get output at k
-                y = np.roll(y, -sys.p, axis=0)
                 y[-sys.p:, :] = _c @ x + vk
                 # Compute control input at k
-            
-            # Update internal state at k+1
-            e = np.pad(e, ((0, sys.n),(0, 0)),
-                       mode='constant')[sys.n:, :]
+                                        
             ey = np.vstack([e, y])  if sys.p > 0 else e
-            
-            u = (phi[sys.n:, :] @ ey) if sys.m > 0 else 0
-            e[-sys.n:, :] = -phi[:sys.n, :] @ ey \
-                + (x if sys.p == 0 else 0)
+        
+            bu = (_b @ (phi[sys.n:, :] @ ey)) if sys.m > 0 else 0
+                       
+            e = _push_time(e, sys.n)
+            # Update internal state at k+1
+            y = _push_time(y, sys.p)
+            e[-2*sys.n:-sys.n, :] = (-phi[:sys.n, :] @
+                                     np.vstack([e, y])) \
+                if sys.p > 0 else (-phi[:sys.n, :] @ e + x)
+                
+#            print("corresponding e: ")
+#            print(e[-sys.n:, :])
+#            print("state: ")
+#            print(x)
+#            print("distrubance: ")
+#            print(wk)
             
             # Get state at k+1
-            x = _a @ x + wk + (_b @ u if sys.m > 0 else 0)
+            x = _a @ x + wk + bu
             
             # append result
             xs = np.vstack([xs, x])
             ys = np.vstack([ys, (_c @ x) if sys.p > 0 else x])
+            us = np.vstack([us, (phi[sys.n:, :] @ ey)
+                            if sys.m > 0 else 0])
+            xu = np.vstack([x, phi[sys.n:, :] @ ey]) \
+                            if sys.m > 0 else x
+            if cost is not None:
+                cs = np.vstack([cs, np.linalg.norm(cost @ xu,
+                                                   axis=0)**2])
         
-        w[d] = np.mean(ys, axis=1) if average else ys
+        w[d] = cs if cost is not None else ys
     pprint("Done!")
-    
-    print(phi[:sys.n, :])
-    print(phi[sys.n:, :])
     
     return w

@@ -35,7 +35,7 @@ if __name__ == '__main__':
                         
     # Evaluate identity map to get just the patterns
     train_pattern = eval(np.eye((sls.n+sls.p)*sls.T),
-                         sls.T, patterns, 20, average=False)
+                         sls.T, patterns, 20)
     dro.train(sys.wb*np.real(train_pattern["uniform"]))
     _drmkcons = lambda phi : dro.mkcons(phi, sys.H, sys.h)
 
@@ -56,12 +56,15 @@ if __name__ == '__main__':
                 
     print(" ".ljust(16), "[no noise, bounded, dro]")
     for p in patterns:
-        e_hu[p] = np.linalg.norm(e_hu[p])
-        e_h2[p] = np.linalg.norm(e_h2[p])
-        e_hd[p] = np.linalg.norm(e_hd[p])
+        e_hu[p] = np.linalg.norm(np.mean(np.abs(e_hu[p]),
+                                         axis=1))
+        e_h2[p] = np.linalg.norm(np.mean(np.abs(e_h2[p]),
+                                         axis=1))
+        e_hd[p] = np.linalg.norm(np.mean(np.abs(e_hd[p]),
+                                         axis=1))
         e = np.array([e_h2[p], e_hd[p]])
-        best = np.min(e)
-        print(p.ljust(16), np.round((e/best - 1)*10000)/100)
+        e = np.round((e/np.min(e) - 1)*10000)/100
+        print(p.ljust(16), np.where(e == 0, 1, e))
     
     """
     plot_numpy_dict(

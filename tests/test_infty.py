@@ -6,10 +6,9 @@ from src.utils import plot_numpy_dict, eval, eval_infty
 from src.models import foo
 from src.models import andrea as ada
 from src.models import double_integrator as din
-#from src.models.sim import simulate_system
 from src.sls_cvx import sls, dro
-#from src.sls import sls as slsreg
-#from src.sls import dro
+from tqdm import tqdm
+from scipy.linalg import sqrtm
 
 import seaborn as sns
 import matplotlib.pyplot as plt
@@ -17,54 +16,92 @@ import cvxpy as cp
 
 if __name__ == '__main__':
     
-    sys = foo
-    T, test_T = 3, 500
-    patterns = ["gaussian", "uniform0.5", "uniform", "constant"]
-    #            "sine", "sawtooth", "step", "stairs"]
+    sys = din
+    #sys.prm = 1.1
+    #sys.prm = 0.2
+    T, test_T = 30, 100
+    n_train, n_test = 20, 500
+    # TODO: understand why constant is a problem
+    # Constant is a problem if T is too small (controllability)
+    patterns = ["gaussian", "uniform", "uniform0.5", "constant",
+                "sine", "sawtooth", "step", "stairs"]
+    patterns = ["uniform0.5"]
     
     # We can use zeros for the trajectory because the system is LTI
     sls.set(sys, np.linspace(0, 1, T), np.zeros((sys.n, T)),
                cost=(np.eye(sys.n), np.eye(sys.m)), axis=1)
                
-    print(sls._opt_variables("infty"))
-
-    # Build constraints lists
-    _mkconsx = lambda phi : sls.mkcons(phi, sys.H, sys.h,
-                                       sys.Hw, 0*sys.hw, False)
-                                       
-    _mkcons = lambda phi : sls.mkcons(phi, sys.H, sys.h,
-                                      sys.Hw, sys.hw, False)
-                        
     # Evaluate identity map to get just the patterns
-    train_pattern = eval(np.eye((sls.n+sls.p)*sls.T),
-                         sls.T, patterns, 20, average=False)
-    dro.train(sys.wb*np.real(train_pattern["uniform"]))
-    _drmkcons = lambda phi : dro.mkcons(phi, sys.H, sys.h, repeat=False)
-
+    train_pattern = eval_infty(np.eye(sls.n+sls.p), sys, sls.T,
+                               patterns, n_train)
+    # Use more samples for Gaussian mean and variance
+    mean_pattern = eval_infty(np.eye(sls.n+sls.p), sys, sls.T,
+                              patterns, n_test)
+               
+    # Deal with each pattern separately for training
+    e_g, e_e, e_r = dict(), dict(), dict()
+    for pat in tqdm(patterns):
+        #dro.eps = np.max(np.linalg.svd(train_pattern[pat],
+        #                 compute_uv=False))/np.sqrt(n_train)
+        #dro.train(0*train_pattern[pat][:, [0]])
         
-    # Solve the h2, hinf and regret problems
-    pxu, pxuv, puu, puuv = sls.min('h2 infty', constraints=None)
-    px2, px2v, pu2, pu2v = sls.min('h2 infty', constraints=None)
-    pxd, pxdv, pud, pudv = dro.min('dro infty', constraints=None)
+        # Gaussian centered on mean and with same std as data
+        # can be implemented as dro with ball radius = std
+        px, pxv, pu, puv = sls.min('h2 infty', constraints=None)
+        pxg, pug = np.hstack((px, pxv)), np.hstack((pu, puv))
+        print(pxg)
+#        dro.eps = 1e-3*sys.wb
+#        dro.train(sqrtm(mean_pattern[pat] @ mean_pattern[pat].T
+#                        + 1e-8*np.eye(mean_pattern[pat].shape[0])))
+#        px, pxv, pu, puv = \
+#            dro.min('dro infty', constraints=lambda phi :
+#                    dro.mkcons(phi, sys.H, sys.h, repeat=False))
+#        pxg, pug = np.hstack((px, pxv)), np.hstack((pu, puv))
+        
+        # Empirical distribution
+        dro.train(train_pattern[pat])
+        px, pxv, pu, puv = \
+            dro.min('dro infty', constraints=lambda phi :
+                    dro.mkcons(phi, sys.H, sys.h, repeat=False))
+        pxe, pue = np.hstack((px, pxv)), np.hstack((pu, puv))
+        
+        # Empirical distribution
+        dro.eps = 0.2*sys.wb
+        px, pxv, pu, puv = \
+            dro.min('dro infty', constraints=lambda phi :
+                    dro.mkcons(phi, sys.H, sys.h, repeat=False))
+        pxr, pur = np.hstack((px, pxv)), np.hstack((pu, puv))
+                
+        # Evaluate policies
+        e_g[pat] = eval_infty(np.vstack((pxg, pug)), sys,
+                              test_T, [pat], n_test, cost=sls.Ss2)[pat]
+        e_e[pat] = eval_infty(np.vstack((pxe, pue)), sys,
+                              test_T, [pat], n_test, cost=sls.Ss2)[pat]
+        e_r[pat] = eval_infty(np.vstack((pxr, pur)), sys,
+                              test_T, [pat], n_test, cost=sls.Ss2)[pat]
+                
+    print(" ".ljust(16), "[h2, emp, dro]")
+    err_plot = {"x": np.arange(test_T+1)}
+    for pat in patterns:
+        if pat == patterns[0]:#"sine":
+            err_plot["g"] = np.mean(np.abs(e_g[pat]), axis=1)
+            err_plot["e"] = np.mean(np.abs(e_e[pat]), axis=1)
+            err_plot["r"] = np.mean(np.abs(e_r[pat]), axis=1)
+            
+        e_g[pat] = np.linalg.norm(np.mean(np.abs(e_g[pat]),
+                                          axis=1))/test_T
+        e_e[pat] = np.linalg.norm(np.mean(np.abs(e_e[pat]),
+                                          axis=1))/test_T
+        e_r[pat] = np.linalg.norm(np.mean(np.abs(e_r[pat]),
+                                          axis=1))/test_T
+        e = np.array([e_g[pat], e_e[pat], e_r[pat]])
+        e = np.round((e/np.min(e) - 1)*10000)/100
+        print(pat.ljust(16), np.where(e == 0, 1, e))
     
-    # stack v and w maps
-    pxu, puu = np.hstack((pxu, pxuv)), np.hstack((puu, puuv))
-    px2, pu2 = np.hstack((px2, px2v)), np.hstack((pu2, pu2v))
-    pxd, pud = np.hstack((pxd, pxdv)), np.hstack((pud, pudv))
-                
-    e_hu = eval_infty(np.vstack((pxu, puu)), sys, test_T, patterns, 1000)
-    e_h2 = eval_infty(np.vstack((px2, pu2)), sys, test_T, patterns, 1000)
-    e_hd = eval_infty(np.vstack((pxd, pud)), sys, test_T, patterns, 1000)
-                
-    print(" ".ljust(16), "[no noise, bounded, dro]")
-    for p in patterns:
-        e_hu[p] = np.linalg.norm(e_hu[p])/test_T
-        e_h2[p] = np.linalg.norm(e_h2[p])/test_T
-        e_hd[p] = np.linalg.norm(e_hd[p])/test_T
-        print(e_h2[p], e_hd[p])
-        e = np.array([e_h2[p], e_hd[p]])
-        best = np.min(e)
-        print(p.ljust(16), np.round((e/best - 1)*10000)/100)
+    plot_numpy_dict(err_plot, x_label="x", y_label="cost")
+        
+    for pat in patterns:
+        print(e_g[pat], e_e[pat], e_r[pat])
     
     """
     plot_numpy_dict(

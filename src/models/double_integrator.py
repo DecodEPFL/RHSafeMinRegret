@@ -17,7 +17,7 @@ p = 1
 prm = 0.0
 
 # Polytopic constraints
-xb, ub, wb = 3, 2, 1
+xb, ub, wb = 5, 5, 0.0001
 H = np.vstack((np.eye(n+m), -np.eye(n+m)))
 h = np.array(([xb]*n + [ub]*m)*2)
 Hw = np.vstack((np.eye(n+p), -np.eye(n+p)))
