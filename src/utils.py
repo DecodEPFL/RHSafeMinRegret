@@ -4,6 +4,7 @@ import numpy as np
 from tikzplotlib import save as tikz_save
 from scipy.sparse.linalg import eigs
 from tqdm import tqdm
+from icecream import ic
 
 matplotlib.rcParams['lines.markersize'] = 2
 plt.ion()
@@ -166,9 +167,10 @@ def eval_infty(phi, sys, t, disturbances, n=1,
     elif type(disturbances) is not list:
         raise TypeError("please specify disturbances as str or "
                         + "list of strs.")
-    if np.all(phi == np.eye(sys.n+sys.p)):
-        just_profile = True
-    elif phi.shape[0] != sys.n+sys.m:
+    if phi.shape[0] == sys.n+sys.m:
+        if phi.shape[1] == sys.n+sys.m:
+            just_profile = np.all(phi == np.eye(sys.n+sys.p))
+    else:
         raise ValueError("Closed loop map dimension 0 does not \
                           correspond to given system.")
     T = int(phi.shape[1]/(sys.n+sys.p))
@@ -196,6 +198,7 @@ def eval_infty(phi, sys, t, disturbances, n=1,
         elif "constant" in d:  # Constant at 1
             f = float(d.replace("constant", "")) \
                 if d != "constant" else 1
+            #w[d] = sys.wb * np.random.uniform(f, f)*np.ones((npp*t, n))
             w[d] = sys.wb * f*np.ones((npp*t, n))
         elif "sine" in d:  # Sinusoid of frequency f
             f = int(d.replace("sine", "")) if d != "sine" else 1.0/3

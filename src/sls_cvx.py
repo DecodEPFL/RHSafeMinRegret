@@ -1,7 +1,7 @@
 from src.conf import np
 from tqdm import tqdm
 import src.conf as conf
-from scipy.linalg import sqrtm
+from scipy.linalg import sqrtm, block_diag as blkdiag
 import cvxpy as cp
 
 class sls:
@@ -374,17 +374,55 @@ class sls:
                              sls.T*sls.n + (t+1)*sls.p))
                              
             # If the system has an input
-            if sls.m > 0 and t > 0:
+            if sls.m > 0:
                 cons += [_ab @ phi[:, itp1] ==
                          phi[:, it][:sls.n, :] * (t > 0)]
 
             # If the system has an output
-            if sls.p > 0 and t > 0:
+            if sls.p > 0:
                 cons += [phi[:, itp1] @ _ac ==
                          phi[:, it][:, :sls.n] * (t > 0)]
-            if t == 0:
-                cons += [phi[:, itp1] @ _ac == 0,
-                         _ab @ phi[:, itp1] == 0]
+        return cons
+        
+            
+    def _achievability_infty_2(phi):
+    #############################################################
+    #   Builds the achievability constraints on the Phi matrices
+    #   in infinite horizon (FIR).
+    #
+    #   :param phi: full closed loop map
+    #   :return: Optimization variables for cvxpy
+    #############################################################
+    
+        # Handy matrices
+        _a = sls.A[:sls.n, :sls.n]
+        _b = sls.B[:sls.n, :sls.m]
+        _c = sls.C[:sls.p, :sls.n]
+        _ab = np.hstack((_a, _b))
+        _ac = np.vstack((_a, _c))
+        _io = np.hstack((np.eye(sls.n), 0*_b))
+        _zp = np.hstack((np.eye(sls.T), np.zeros((sls.T, 1))))
+        _zm = np.hstack((np.zeros((sls.T, 1)), np.eye(sls.T)))
+        
+        # short notation
+        _k = np.kron
+        _i = np.eye
+        
+        cons = []
+        cons += [_io @ phi @
+                 blkdiag(_k(_zm, _i(sls.n)), _k(_zm, _i(sls.p)))
+                 == _ab @ phi @
+                 blkdiag(_k(_zp, _i(sls.n)), _k(_zp, _i(sls.p)))
+                 + np.hstack((_k(_zp[-1, :], _i(sls.n)),
+                              _k(_zp[-1, :], 0*_c.T)))]
+                              
+        cons += [phi @ np.vstack((_k(_zm, _i(sls.n)),
+                                  _k(_zm, 0*_c)))
+                 == phi @ np.vstack((_k(_zp, _a),
+                                     _k(_zp, _c)))
+                 + np.vstack((_k(_zp[-1, :], _i(sls.n)),
+                              _k(_zp[-1, :], 0*_c)))]
+
         return cons
             
     @staticmethod
@@ -560,6 +598,9 @@ class dro(sls):
         # State and input constraints
         HT, hT = (np.kron(H, sls.I), np.kron(np.diag(sls.I), -h)) \
             if repeat else (H, -h)
+            
+        HT *= 10
+        hT *= 10
 
         # Dual variables
         lbdx, lbdu = cp.Variable(), cp.Variable()
@@ -571,7 +612,7 @@ class dro(sls):
         # from Liviu and Nicolas
         
         # Constraints on dual varialbes (included the one embeded in J+1)
-        constraints = [taux <= sx, tauu <= su,
+        constraints = [(y - 1)/y * taux <= sx, (y - 1)/y * tauu <= su,
                        lbdx >= 0, lbdu >= 0]
         
         # CVar cost less than 0
@@ -614,13 +655,13 @@ class dro(sls):
         vw = dro.profiles
         
         # Dual variables
-        lbd, s = cp.Variable(), cp.Variable(N)
-        cons = [lbd >= 0, s >= 0]
+        lbd, s, a = cp.Variable(), cp.Variable(N), cp.Variable()
+        cons = [lbd >= 0, s >= 0, a <= 1, a >= 0]
                     
         # Adding variable for Phi.T Phi to stay convex
         _pcsq = cp.Variable((phi.shape[1], phi.shape[1]))
         sdpc = [cp.bmat([[_pcsq, phi.T @ sls.Ss2],
-                         [sls.Ss2 @ phi, np.eye(phi.shape[0])]
+                         [sls.Ss2 @ phi, np.eye(phi.shape[0])*10]
                          ]) >> 0]
 
         # SDP constraint

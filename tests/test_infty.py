@@ -17,19 +17,20 @@ import cvxpy as cp
 if __name__ == '__main__':
     
     sys = din
-    #sys.prm = 1.1
+    sys.prm = 1.1
     #sys.prm = 0.2
-    T, test_T = 7, 100
+    T, test_T = 6, 100
     n_train, n_test = 20, 500
-    # TODO: understand why constant is a problem
-    # Constant is a problem if T is too small (controllability)
+    # TODO: check why MOSEK fails all the time now
     patterns = ["gaussian", "uniform", "uniform0.5", "constant",
                 "sine", "sawtooth", "step", "stairs"]
-    #patterns = ["gaussian", "uniform0.5", "sine"]
+    #patterns = ["gaussian"]
     
     # We can use zeros for the trajectory because the system is LTI
     sls.set(sys, np.linspace(0, 1, T), np.zeros((sys.n, T)),
                cost=(np.eye(sys.n), np.eye(sys.m)), axis=1)
+               
+    #sls.verb = True
                
     # Evaluate identity map to get just the patterns
     train_pattern = eval_infty(np.eye(sls.n+sls.p), sys, sls.T,
@@ -41,7 +42,6 @@ if __name__ == '__main__':
     # Deal with each pattern separately for training
     e_g, e_e, e_r = dict(), dict(), dict()
     for pat in tqdm(patterns):
-
 #        dro.eps = np.max(np.linalg.svd(train_pattern[pat],
 #                         compute_uv=False))/np.sqrt(n_train)
 #        dro.train(0*train_pattern[pat][:, [0]])
@@ -62,7 +62,7 @@ if __name__ == '__main__':
         pxg, pug = np.hstack((px, pxv)), np.hstack((pu, puv))
         
         # Empirical distribution
-        dro.eps = 1e-4*sys.wb
+        dro.eps = 1e-3*sys.wb
         dro.train(train_pattern[pat])
         px, pxv, pu, puv = \
             dro.min('dro infty', constraints=lambda phi :
@@ -90,7 +90,7 @@ if __name__ == '__main__':
     
     err_plot = {"x": np.arange(test_T+1)}
     for pat in patterns:
-        if pat == "step":
+        if pat == "gaussian":#"step":
             err_plot["g"] = np.mean(np.abs(e_g[pat]), axis=1)
             err_plot["e"] = np.mean(np.abs(e_e[pat]), axis=1)
             err_plot["r"] = np.mean(np.abs(e_r[pat]), axis=1)
